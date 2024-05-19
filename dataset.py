@@ -52,8 +52,15 @@ class LanguageModelingDataset(torch.utils.data.Dataset):
         block_size (int): The size of each block of text.
     """
 
-    def __init__(self, tokenizer, text, block_size):
+    def __init__(self, tokenizer, file_path, block_size):
         self.tokenizer = tokenizer
+
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"The file {file_path} does not exist.")
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+
         self.data = torch.tensor(self.tokenizer.encode(text), dtype=torch.long)
         self.block_size = block_size
 

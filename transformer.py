@@ -19,37 +19,43 @@ class FeedForward(nn.Module):
         return self.fc2(F.relu(self.fc1(x)))
 
 
-def attention(q, k, v):
+def attention(q, k, v, causal):
     """
     Compute attention weights between query and key vectors and return value vectors weighted by the attention weights
     """
-    attention_matrix = F.softmax(torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(k.size(-1)), dim=-1)
-    return torch.matmul(attention_matrix, v)
+    attn_matrix = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(k.size(-1))
+    if causal:
+        context_size = k.size(-2)
+        mask = torch.triu(torch.ones(context_size, context_size, device=attn_matrix.device, dtype=torch.bool), diagonal=1)
+        attn_matrix = attn_matrix.masked_fill(mask, float('-inf'))
+    attn_matrix = F.softmax(attn_matrix, dim=-1)
+    return torch.matmul(attn_matrix, v)
 
 
 class Head(nn.Module):
     """
     Self-attention head
     """
-    def __init__(self, embed_dim, head_dim):
+    def __init__(self, embed_dim, head_dim, causal):
         super(Head, self).__init__()
         self.Q = nn.Linear(embed_dim, head_dim, bias=False)
         self.K = nn.Linear(embed_dim, head_dim, bias=False)
         self.V = nn.Linear(embed_dim, head_dim, bias=False)
+        self.causal = causal
 
     def forward(self, x):
-        return attention(self.Q(x), self.K(x), self.V(x))
+        return attention(self.Q(x), self.K(x), self.V(x), self.causal)
 
 
 class MultiHeadAttention(nn.Module):
     """
     Concatenation of multi self-attention heads with a linear layer on top of it
     """
-    def __init__(self, embed_dim, n_heads):
+    def __init__(self, embed_dim, n_heads, causal):
         super(MultiHeadAttention, self).__init__()
         self.n_heads = n_heads
         head_dim = embed_dim // n_heads
-        self.heads = nn.ModuleList([Head(embed_dim, head_dim) for _ in range(n_heads)])
+        self.heads = nn.ModuleList([Head(embed_dim, head_dim, causal) for _ in range(n_heads)])
         self.linear = nn.Linear(n_heads * head_dim, embed_dim, bias=False)
 
     def forward(self, x):
@@ -62,9 +68,9 @@ class Block(nn.Module):
     """
     Block of multi-head attention and feed-forward neural network with residual connections and layer normalizations
     """
-    def __init__(self, embed_dim, n_head):
+    def __init__(self, embed_dim, n_head, causal):
         super(Block, self).__init__()
-        self.self_attn = MultiHeadAttention(embed_dim, n_head)
+        self.self_attn = MultiHeadAttention(embed_dim, n_head, causal)
         self.feed_forward = FeedForward(embed_dim, embed_dim*4, embed_dim)
         self.ln1 = nn.LayerNorm(embed_dim)
         self.ln2 = nn.LayerNorm(embed_dim)
@@ -79,11 +85,11 @@ class TransformerEncoder(nn.Module):
     """
     Transformer encoder with multiple blocks
     """
-    def __init__(self, vocab_size, context_size, embed_dim, n_layers, n_heads):
+    def __init__(self, vocab_size, context_size, embed_dim, n_layers, n_heads, causal=False):
         super(TransformerEncoder, self).__init__()
         self.token_embedding = nn.Embedding(vocab_size, embed_dim)
         self.position_embedding = nn.Embedding(context_size, embed_dim)
-        self.blocks = nn.ModuleList([Block(embed_dim, n_heads) for _ in range(n_layers)])
+        self.blocks = nn.ModuleList([Block(embed_dim, n_heads, causal) for _ in range(n_layers)])
         self.ln = nn.LayerNorm(embed_dim)
 
     def forward(self, seq):

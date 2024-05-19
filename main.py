@@ -4,7 +4,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.nn import functional as F
 import os, random
 
-from classifier import TransformerClassifier
+from model import TransformerClassifier, TransformerLM
 from tokenizer import SimpleTokenizer
 from dataset import SpeechesClassificationDataset, LanguageModelingDataset
 
@@ -84,14 +84,14 @@ def compute_perplexity(decoderLMmodel, data_loader, eval_iters=100):
     Make sure to use the cross entropy loss for the decoderLMmodel.
     """
     decoderLMmodel.eval()
-    losses= []
+    losses = []
     for X, Y in data_loader:
         X, Y = X.to(device), Y.to(device)
-        loss = decoderLMmodel(X, Y) # your model should be computing the cross entropy loss
+        loss, logits = decoderLMmodel(X, Y)  # your model should be computing the cross entropy loss
         losses.append(loss.item())
-        total_loss += loss.item()
-        if len(losses) >= eval_iters: break
-
+        # total_loss += loss.item()
+        if len(losses) >= eval_iters:
+            break
 
     losses = torch.tensor(losses)
     mean_loss = losses.mean()
@@ -130,26 +130,48 @@ def classification(tokenizer, data_folder):
               f"Test Accuracy: {test_accuracy:.2f}%")
 
 
+def language_modeling(tokenizer, data_folder):
+    train_LM_dataset = LanguageModelingDataset(tokenizer, data_folder + "/train_LM.txt", block_size)
+    train_LM_loader = DataLoader(train_LM_dataset, batch_size=batch_size, shuffle=True)
+
+    test_LM_hbush_dataset = LanguageModelingDataset(tokenizer, data_folder + "/test_LM_hbush.txt", block_size)
+    test_LM_obama_dataset = LanguageModelingDataset(tokenizer, data_folder + "/test_LM_obama.txt", block_size)
+    test_LM_wbush_dataset = LanguageModelingDataset(tokenizer, data_folder + "/test_LM_wbush.txt", block_size)
+    test_LM_hbush_loader = DataLoader(test_LM_hbush_dataset, batch_size=batch_size)
+    test_LM_obama_loader = DataLoader(test_LM_obama_dataset, batch_size=batch_size)
+    test_LM_wbush_loader = DataLoader(test_LM_wbush_dataset, batch_size=batch_size)
+
+    # iterate over the training data for a fixed number of iterations:
+    language_model = TransformerLM(tokenizer.vocab_size, block_size, n_embd, n_layer, n_head)
+    optimizer = torch.optim.AdamW(language_model.parameters(), lr=learning_rate)
+    for i, (xb, yb) in enumerate(train_LM_loader):
+        if i % eval_interval == 0 or i >= max_iters:
+            train_perplexity = compute_perplexity(language_model, train_LM_loader)
+            hbush_perplexity = compute_perplexity(language_model, test_LM_hbush_loader, eval_iters)
+            obama_perplexity = compute_perplexity(language_model, test_LM_obama_loader, eval_iters)
+            wbush_perplexity = compute_perplexity(language_model, test_LM_wbush_loader, eval_iters)
+            print(f"Iter [{i}/{max_iters}], "
+                  f"Train Perplexity: {train_perplexity:.4f}, "
+                  f"H. Bush Perplexity: {hbush_perplexity:.2f}, "
+                  f"Obama Perplexity:: {obama_perplexity:.2f}, "
+                  f"W. Bush Perplexity: {wbush_perplexity:.2f}")
+            if i >= max_iters:
+                break
+        xb, yb = xb.to(device), yb.to(device)
+        optimizer.zero_grad(set_to_none=True)
+        loss, logits = language_model(xb, yb)
+        loss.backward()
+        optimizer.step()
+
+
 def main():
     data_folder = '../speechesdataset'
     print("Loading data and creating tokenizer ...")
     texts = load_texts(data_folder)
     tokenizer = SimpleTokenizer(' '.join(texts)) # create a tokenizer from the data
     print("Vocabulary size is", tokenizer.vocab_size)
-    # classification(tokenizer, data_folder)
-
-    inputfile = "speechesdataset/train_LM.txt"
-    with open(inputfile, 'r', encoding='utf-8') as f:
-        lmtrainText = f.read()
-    train_LM_dataset = LanguageModelingDataset(tokenizer, lmtrainText,  block_size)
-    train_LM_loader = DataLoader(train_LM_dataset, batch_size=batch_size, shuffle=True)
-
-    # for the language modeling task, you will iterate over the training data for a fixed number of iterations like this:
-    for i, (xb, yb) in enumerate(train_LM_loader):
-        if i >= max_iters:
-            break
-        xb, yb = xb.to(device), yb.to(device)
-        # LM training code here
+    classification(tokenizer, data_folder)
+    language_modeling(tokenizer, data_folder)
 
 
 if __name__ == "__main__":
