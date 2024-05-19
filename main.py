@@ -2,12 +2,11 @@ import torch
 from torch.utils.data import DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from torch.nn import functional as F
-import os
+import os, random
 
 from classifier import TransformerClassifier
 from tokenizer import SimpleTokenizer
 from dataset import SpeechesClassificationDataset, LanguageModelingDataset
-
 
 seed = 42
 
@@ -36,14 +35,11 @@ n_hidden = 100  # Hidden size for the classifier
 n_output = 3  # Output size for the classifier, we have 3 classes
 epochs_CLS = 15  # epochs for classifier training
 
-# Problem specifications:
-n_classes = 3
 
 def load_texts(directory):
     """
     This function loads all texts from the specified directory, ignoring any files with "test" in their name. The text is used for "training" the tokenizer. Since our tokenizer is simple, we don't need to do any training, but we still need to ignore the test data. 
     """
-
     texts = []
     files = os.listdir(directory)
     for filename in files: 
@@ -105,53 +101,57 @@ def compute_perplexity(decoderLMmodel, data_loader, eval_iters=100):
     return perplexity
 
 
+def classification(tokenizer, data_folder):
+    train_CLS_dataset = SpeechesClassificationDataset(tokenizer, data_folder + "/train_CLS.tsv")
+    train_CLS_loader = DataLoader(train_CLS_dataset, batch_size=batch_size, collate_fn=collate_batch, shuffle=True)
+    test_CLS_dataset = SpeechesClassificationDataset(tokenizer, data_folder + "/test_CLS.tsv")
+    test_CLS_loader = DataLoader(test_CLS_dataset, batch_size=batch_size, collate_fn=collate_batch)
+
+    # train a classifier transformer for #epochs_CLS epochs with AdamW optimizer and crossentropy loss:
+    cls_model = TransformerClassifier(tokenizer.vocab_size, block_size, n_embd, n_layer, n_head, n_hidden, n_output)
+    optimizer = torch.optim.AdamW(cls_model.parameters(), lr=learning_rate)
+    for epoch in range(epochs_CLS):
+        train_loss = 0
+        for xb, yb in train_CLS_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            optimizer.zero_grad(set_to_none=True)
+            logits = cls_model(xb)
+            loss = F.cross_entropy(logits, yb)
+            train_loss += loss
+            loss.backward()
+            optimizer.step()
+
+        train_accuracy = compute_classifier_accuracy(cls_model, train_CLS_loader)
+        test_accuracy = compute_classifier_accuracy(cls_model, test_CLS_loader)
+
+        print(f"Epoch [{epoch + 1}/{epochs_CLS}], "
+              f"Train Loss: {train_loss / len(train_CLS_loader):.4f}, "
+              f"Train Accuracy: {train_accuracy:.2f}%, "
+              f"Test Accuracy: {test_accuracy:.2f}%")
+
+
 def main():
     data_folder = '../speechesdataset'
     print("Loading data and creating tokenizer ...")
     texts = load_texts(data_folder)
     tokenizer = SimpleTokenizer(' '.join(texts)) # create a tokenizer from the data
     print("Vocabulary size is", tokenizer.vocab_size)
+    # classification(tokenizer, data_folder)
 
-    train_CLS_dataset = SpeechesClassificationDataset(tokenizer, data_folder + "/train_CLS.tsv")
-    train_CLS_loader = DataLoader(train_CLS_dataset, batch_size=batch_size, collate_fn=collate_batch,shuffle=True)
+    inputfile = "speechesdataset/train_LM.txt"
+    with open(inputfile, 'r', encoding='utf-8') as f:
+        lmtrainText = f.read()
+    train_LM_dataset = LanguageModelingDataset(tokenizer, lmtrainText,  block_size)
+    train_LM_loader = DataLoader(train_LM_dataset, batch_size=batch_size, shuffle=True)
 
-    # train a classifier transformer for #epochs_CLS epochs with AdamW optimizer and crossentropy loss:
-    cls_model = TransformerClassifier(n_classes)
-    # optimizer = torch.optim.AdamW(cls_model.parameters(), lr=learning_rate)
-    # for epoch in range(epochs_CLS):
-    #     for xb, yb in train_CLS_loader:
-    #         xb, yb = xb.to(device), yb.to(device)
-    #         optimizer.zero_grad(set_to_none=True)
-    #         logits = cls_model(xb)
-    #         loss = F.cross_entropy(logits, yb)
-    #         loss.backward()
-    #         optimizer.step()
-
-    test_CLS_dataset = SpeechesClassificationDataset(tokenizer, data_folder + "/test_CLS.tsv")
-    test_CLS_loader = DataLoader(test_CLS_dataset, batch_size=batch_size, collate_fn=collate_batch)
-    test_accuracy = compute_classifier_accuracy(cls_model, test_CLS_loader)
-    print("Test Accuracy is ", test_accuracy)
-
-
-
-    # inputfile = "speechesdataset/train_LM.txt"
-    # with open(inputfile, 'r', encoding='utf-8') as f:
-    #     lmtrainText = f.read()
-    # train_LM_dataset = LanguageModelingDataset(tokenizer, lmtrainText,  block_size)
-    # train_LM_loader = DataLoader(train_LM_dataset, batch_size=batch_size, shuffle=True)
-    #
-    #
-    #
-    # # for the language modeling task, you will iterate over the training data for a fixed number of iterations like this:
-    # for i, (xb, yb) in enumerate(train_LM_loader):
-    #     if i >= max_iters:
-    #         break
-    #     xb, yb = xb.to(device), yb.to(device)
-    #     # LM training code here
-
-    
-
+    # for the language modeling task, you will iterate over the training data for a fixed number of iterations like this:
+    for i, (xb, yb) in enumerate(train_LM_loader):
+        if i >= max_iters:
+            break
+        xb, yb = xb.to(device), yb.to(device)
+        # LM training code here
 
 
 if __name__ == "__main__":
     main()
+
