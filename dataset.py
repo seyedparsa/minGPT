@@ -36,7 +36,7 @@ class SpeechesClassificationDataset(Dataset):
 
     def __getitem__(self, index):
         label, text = self.samples[index]
-        input_ids = torch.tensor(self.tokenizer.encode(text), dtype=torch.long)
+        input_ids = torch.tensor(self.tokenizer.encode(text, True), dtype=torch.long)
         label_tensor = torch.tensor(label, dtype=torch.long)
         
         return input_ids, label_tensor

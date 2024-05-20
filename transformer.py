@@ -19,19 +19,6 @@ class FeedForward(nn.Module):
         return self.fc2(F.relu(self.fc1(x)))
 
 
-def attention(q, k, v, causal):
-    """
-    Compute attention weights between query and key vectors and return value vectors weighted by the attention weights
-    """
-    attn_matrix = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(k.size(-1))
-    if causal:
-        context_size = k.size(-2)
-        mask = torch.triu(torch.ones(context_size, context_size, device=attn_matrix.device, dtype=torch.bool), diagonal=1)
-        attn_matrix = attn_matrix.masked_fill(mask, float('-inf'))
-    attn_matrix = F.softmax(attn_matrix, dim=-1)
-    return torch.matmul(attn_matrix, v)
-
-
 class Head(nn.Module):
     """
     Self-attention head
@@ -42,9 +29,30 @@ class Head(nn.Module):
         self.K = nn.Linear(embed_dim, head_dim, bias=False)
         self.V = nn.Linear(embed_dim, head_dim, bias=False)
         self.causal = causal
+        self.attn_map = None
+
+    def attention(self, q, k, v):
+        """
+        Compute attention map between query and key vectors and return value vectors weighted by the attention map
+        """
+        self.attn_map = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(k.size(-1))
+        context_size = k.size(-2)
+        if self.causal:
+            mask = torch.triu(torch.ones(context_size, context_size, device=self.attn_map.device), diagonal=1)
+            self.attn_map = self.attn_map.masked_fill(mask.bool(), float('-inf'))
+        # else: # Uncomment for part 3
+        #     attn_window = 3
+        #     mask = (torch.triu(torch.ones(context_size, context_size, device=self.attn_map.device), diagonal=attn_window)
+        #             + torch.tril(torch.ones(context_size, context_size, device=self.attn_map.device), diagonal=-attn_window))
+        #     self.attn_map = self.attn_map.masked_fill(mask.bool(), float('-inf'))
+        self.attn_map = F.softmax(self.attn_map, dim=-1)
+        return torch.matmul(self.attn_map, v)
 
     def forward(self, x):
-        return attention(self.Q(x), self.K(x), self.V(x), self.causal)
+        return self.attention(self.Q(x), self.K(x), self.V(x))
+
+    def get_attn_map(self):
+        return self.attn_map
 
 
 class MultiHeadAttention(nn.Module):
@@ -93,12 +101,20 @@ class TransformerEncoder(nn.Module):
         self.ln = nn.LayerNorm(embed_dim)
 
     def forward(self, seq):
-        device = seq.device
         batch_size, seq_len = seq.shape
         token_embed = self.token_embedding(seq)
-        pos_embed = self.position_embedding(torch.arange(seq_len, dtype=torch.long, device=device))
+        pos_embed = self.position_embedding(torch.arange(seq_len, dtype=torch.long, device=seq.device))
         x = token_embed + pos_embed
         for block in self.blocks:
             x = block(x)
         x = self.ln(x)
         return x
+
+    def get_attn_maps(self):
+        attn_maps = [
+            [head.get_attn_map() for head in block.self_attn.heads]
+            for block in self.blocks
+        ]
+        return torch.stack([torch.stack(block_maps, 1) for block_maps in attn_maps], 1)
+
+

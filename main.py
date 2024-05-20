@@ -3,10 +3,12 @@ from torch.utils.data import DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from torch.nn import functional as F
 import os, random
+import argparse
 
 from model import TransformerClassifier, TransformerLM
 from tokenizer import SimpleTokenizer
 from dataset import SpeechesClassificationDataset, LanguageModelingDataset
+from utilities import Utilities
 
 seed = 42
 
@@ -21,13 +23,11 @@ n_embd = 64  # Embedding dimension
 n_head = 2  # Number of attention heads
 n_layer = 4  # Number of transformer layers
 
-
 eval_interval = 100  # How often to evaluate train and test perplexity during training
-max_iters = 500 # For language modeling, we can process all the batches for the entire dataset, but that takes a while, so we'll limit it to 500 iterations. For batch size of 16 and block size of  32, this is roughly, this is  500 * 16 * 32 = 256000 tokens, SOTA LMs are trained on trillions of tokens, so this is a very small dataset.
+max_iters = 500  # For language modeling, we can process all the batches for the entire dataset, but that takes a while, so we'll limit it to 500 iterations. For batch size of 16 and block size of  32, this is roughly, this is  500 * 16 * 32 = 256000 tokens, SOTA LMs are trained on trillions of tokens, so this is a very small dataset.
 eval_iters = 200  # Number of iterations to evaluate perplexity on the test set
 
-
-## classifier training hyperparameters. It is a simple 1 hidden layer feedforward network, with input 
+## classifier training hyperparameters. It is a simple 1 hidden layer feedforward network, with input
 ## size of 64, hidden size of 50 and output size of 3.
 
 n_input = 64  # Input size for the classifier, should match the embedding size of the transformer
@@ -42,7 +42,7 @@ def load_texts(directory):
     """
     texts = []
     files = os.listdir(directory)
-    for filename in files: 
+    for filename in files:
         if "test" in filename:  ## don't "read test files"
             continue
         with open(os.path.join(directory, filename), 'r', encoding='utf-8') as file:
@@ -57,8 +57,9 @@ def collate_batch(batch):
     padded_sequences = pad_sequence(data, batch_first=True, padding_value=0)
     padded_sequences = padded_sequences[:, :block_size]  # Truncate if longer
     # Add padding if shorter
-    padded_sequences = torch.nn.functional.pad(padded_sequences, (0, max(0, block_size - padded_sequences.shape[1])), "constant", 0)
-    labels = torch.stack(labels)  
+    padded_sequences = torch.nn.functional.pad(padded_sequences, (0, max(0, block_size - padded_sequences.shape[1])),
+                                               "constant", 0)
+    labels = torch.stack(labels)
     return padded_sequences, labels
 
 
@@ -101,7 +102,7 @@ def compute_perplexity(decoderLMmodel, data_loader, eval_iters=100):
     return perplexity
 
 
-def classification(tokenizer, data_folder):
+def classification(tokenizer, data_folder, sentence):
     train_CLS_dataset = SpeechesClassificationDataset(tokenizer, data_folder + "/train_CLS.tsv")
     train_CLS_loader = DataLoader(train_CLS_dataset, batch_size=batch_size, collate_fn=collate_batch, shuffle=True)
     test_CLS_dataset = SpeechesClassificationDataset(tokenizer, data_folder + "/test_CLS.tsv")
@@ -109,6 +110,8 @@ def classification(tokenizer, data_folder):
 
     # train a classifier transformer for #epochs_CLS epochs with AdamW optimizer and crossentropy loss:
     cls_model = TransformerClassifier(tokenizer.vocab_size, block_size, n_embd, n_layer, n_head, n_hidden, n_output)
+    total_params = sum(p.numel() for p in cls_model.parameters())
+    print(f"Total number of parameters in the classification model: {total_params}")
     optimizer = torch.optim.AdamW(cls_model.parameters(), lr=learning_rate)
     for epoch in range(epochs_CLS):
         train_loss = 0
@@ -128,9 +131,11 @@ def classification(tokenizer, data_folder):
               f"Train Loss: {train_loss / len(train_CLS_loader):.4f}, "
               f"Train Accuracy: {train_accuracy:.2f}%, "
               f"Test Accuracy: {test_accuracy:.2f}%")
+    checker = Utilities(tokenizer, cls_model)
+    checker.sanity_check(sentence, block_size, 1)
 
 
-def language_modeling(tokenizer, data_folder):
+def language_modeling(tokenizer, data_folder, sentence):
     train_LM_dataset = LanguageModelingDataset(tokenizer, data_folder + "/train_LM.txt", block_size)
     train_LM_loader = DataLoader(train_LM_dataset, batch_size=batch_size, shuffle=True)
 
@@ -143,6 +148,8 @@ def language_modeling(tokenizer, data_folder):
 
     # iterate over the training data for a fixed number of iterations:
     language_model = TransformerLM(tokenizer.vocab_size, block_size, n_embd, n_layer, n_head)
+    total_params = sum(p.numel() for p in language_model.parameters())
+    print(f"Total number of parameters in the language model: {total_params}")
     optimizer = torch.optim.AdamW(language_model.parameters(), lr=learning_rate)
     for i, (xb, yb) in enumerate(train_LM_loader):
         if i % eval_interval == 0 or i >= max_iters:
@@ -151,7 +158,7 @@ def language_modeling(tokenizer, data_folder):
             obama_perplexity = compute_perplexity(language_model, test_LM_obama_loader, eval_iters)
             wbush_perplexity = compute_perplexity(language_model, test_LM_wbush_loader, eval_iters)
             print(f"Iter [{i}/{max_iters}], "
-                  f"Train Perplexity: {train_perplexity:.4f}, "
+                  f"Train Perplexity: {train_perplexity:.}, "
                   f"H. Bush Perplexity: {hbush_perplexity:.2f}, "
                   f"Obama Perplexity:: {obama_perplexity:.2f}, "
                   f"W. Bush Perplexity: {wbush_perplexity:.2f}")
@@ -163,17 +170,30 @@ def language_modeling(tokenizer, data_folder):
         loss.backward()
         optimizer.step()
 
+    checker = Utilities(tokenizer, language_model)
+    checker.sanity_check(sentence, block_size, 2)
 
-def main():
+
+def main(args):
+    print(f"Running part {args.part}")
     data_folder = '../speechesdataset'
     print("Loading data and creating tokenizer ...")
     texts = load_texts(data_folder)
-    tokenizer = SimpleTokenizer(' '.join(texts)) # create a tokenizer from the data
+    tokenizer = SimpleTokenizer(' '.join(texts))  # create a tokenizer from the data
     print("Vocabulary size is", tokenizer.vocab_size)
-    classification(tokenizer, data_folder)
-    language_modeling(tokenizer, data_folder)
+    if args.part == 1:
+        classification(tokenizer, data_folder, args.sentence)
+    elif args.part == 2:
+        language_modeling(tokenizer, data_folder, args.sentence)
+    else:
+        raise NotImplementedError
 
 
 if __name__ == "__main__":
-    main()
-
+    parser = argparse.ArgumentParser(description='Classification and Language Modeling with Transformers')
+    parser.add_argument('--part', type=int, required=True, help='The part of the homework to run')
+    parser.add_argument('--sentence', type=str,
+                        default="You won’t always get everything you want -- at least not as fast as you want it.",
+                        help='The sentence to encode')
+    args = parser.parse_args()
+    main(args)
