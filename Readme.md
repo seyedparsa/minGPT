@@ -1,8 +1,10 @@
-You can run specify the part when running the code by passing the argument --part. The sentence for which the attentnion maps are generated can also be passed by the argument --sentence but it is optional. Here is an example:
+# Transformer-Based Classifier and Language Model
 
- python main.py --part 1 --sentence "And third, the Congress should, this month, enact measures to increase domestic energy production and energy conservation in order to reduce dependence on foreign oil."
+This project was done as homework for the CSE256: Natural Language Processing course and is heavily inspired by [minGPT](https://github.com/karpathy/minGPT). It consists of a speech classifier and a language model, allowing you to specify which part of the model to run by passing the `--part` argument. Additionally, you can optionally provide a custom sentence for which attention maps will be generated using the `--sentence` argument.
 
---part should be either 1 or 2. You can get the improvements for the third part by doing the following:
-In the forward method of the TransformerClassifier class, and in the attention method of the Head class, comment and uncomment lines based on the instruction.
+## Usage
 
-Please make the plots/part1 and plots/part2 directories for the plots to be generated.
+To run the code, use the following command:
+
+```bash
+python main.py --part <part_number> --sentence "<your_sentence>"
